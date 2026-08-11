@@ -1,15 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Yandex Music Muter for BMSTU Call",
-  "version": "3.1",
-  "description": "Мутит Яндекс Музыку при статусе 'Соединено' и размучивает при окончании звонка.",
-  "permissions": [
-    "tabs",
-    "scripting"
-  ],
+  "name": "BMSTU Call Muter",
+  "version": "5.0",
+  "description": "Мутит вкладку звонка до соединения, а после соединяет — мутит Яндекс Музыку.",
+  "permissions": ["tabs"],
   "host_permissions": [
     "https://mail.bmstu.ru/*",
-    "http://mail.bmstu.ru/*",
     "https://*.bmstu.ru/*",
     "https://music.yandex.ru/*",
     "https://yandex.ru/music/*"
@@ -19,11 +15,7 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://mail.bmstu.ru/*",
-        "http://mail.bmstu.ru/*",
-        "https://*.bmstu.ru/*"
-      ],
+      "matches": ["https://mail.bmstu.ru/*", "https://*.bmstu.ru/*"],
       "js": ["content.js"],
       "run_at": "document_idle",
       "all_frames": true
