@@ -72,6 +72,7 @@ function showConnectedNotification() {
   }
 
   chrome.notifications.create(
+    "bmstu-call-connected",
     {
       type: "basic",
       iconUrl: "icon.png",
@@ -200,16 +201,17 @@ async function injectStatusWatcher(tabId) {
 }
 
 async function injectEmergencyButton(tabId) {
-  if (typeof tabId !== "number" || injectedEmergencyButtonTabs.has(tabId)) return;
+  if (typeof tabId !== "number") return;
   const scripting = getScriptingApi();
 
   await scripting.executeScript({
     target: { tabId },
     func: () => {
-      if (window.__bmstuEmergencyButtonInstalled) return;
-      window.__bmstuEmergencyButtonInstalled = true;
+      const existingButton = document.getElementById("bmstu-emergency-unmute-button");
+      if (existingButton) return;
 
       const button = document.createElement("button");
+      button.id = "bmstu-emergency-unmute-button";
       button.type = "button";
       button.textContent = "Экстренно размутить";
       button.style.cssText = [
