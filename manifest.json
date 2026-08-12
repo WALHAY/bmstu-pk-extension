@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
   "name": "BMSTU Call Muter",
-  "version": "5.0",
-  "description": "Мутит вкладку звонка до соединения, а после соединяет — мутит Яндекс Музыку.",
-  "permissions": ["tabs"],
+  "version": "6.0",
+  "description": "Мутит вкладку звонка до соединения, а после — мутит Яндекс Музыку. Показывает системное уведомление.",
+  "permissions": [
+    "tabs",
+    "notifications"
+  ],
   "host_permissions": [
     "https://mail.bmstu.ru/*",
     "https://*.bmstu.ru/*",
