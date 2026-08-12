@@ -1,39 +1,63 @@
-// ==========================================
-// BACKGROUND SERVICE WORKER
-// ==========================================
+const MAIL_URL = "https://mail.bmstu.ru/*";
+const MAIL_ENTRY_URL = "https://mail.bmstu.ru";
+const YANDEX_MUSIC_URLS = ["https://music.yandex.ru/*", "https://yandex.ru/music/*"];
 
-console.log('[BG] Service worker запущен');
-
-let lastStatus = null;
 let notificationId = null;
-let injectedTabs = new Set();
+const injectedWatcherTabs = new Set();
+const injectedEmergencyButtonTabs = new Set();
+const manualUnmuteTabs = new Set();
+const lastStateByTab = new Map();
 
-// ==========================================
-// УПРАВЛЕНИЕ МЬЮТОМ
-// ==========================================
+function normalizePhone(phone) {
+  return String(phone || "").trim();
+}
+
+function normalizeCallState(state) {
+  if (state === "Connected") return "Connected";
+  if (state === "Provisioned" || state === "Outgoing" || state === "Ringing") return "Provisioned";
+  if (state === "Idle") return "Idle";
+  return null;
+}
+
+function waitForTabComplete(tabId, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      reject(new Error("Таймаут загрузки вкладки mail.bmstu.ru"));
+    }, timeoutMs);
+
+    const onUpdated = (updatedTabId, info) => {
+      if (updatedTabId !== tabId || info.status !== "complete" || done) return;
+      done = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve();
+    };
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
 
 async function setYandexMusicMuted(muted) {
-  const tabs = await chrome.tabs.query({
-    url: ["https://music.yandex.ru/*", "https://yandex.ru/music/*"]
-  });
-  for (const tab of tabs) {
-    try {
-      await chrome.tabs.update(tab.id, { muted });
-      console.log(`[BG] Музыка: вкладка ${tab.id} ${muted ? 'заглушена' : 'разглушена'}`);
-    } catch (e) { /* ignore */ }
-  }
+  const tabs = await chrome.tabs.query({ url: YANDEX_MUSIC_URLS });
+  await Promise.allSettled(
+    tabs
+      .filter((tab) => typeof tab.id === "number")
+      .map((tab) => chrome.tabs.update(tab.id, { muted }))
+  );
 }
 
 async function setCallTabMuted(tabId, muted) {
+  if (typeof tabId !== "number") return;
   try {
     await chrome.tabs.update(tabId, { muted });
-    console.log(`[BG] Вкладка звонка ${tabId} ${muted ? 'заглушена' : 'разглушена'}`);
-  } catch (e) { /* ignore */ }
+  } catch (_) {
+    // Вкладка могла уже закрыться.
+  }
 }
-
-// ==========================================
-// УВЕДОМЛЕНИЕ
-// ==========================================
 
 function showConnectedNotification() {
   if (notificationId) {
@@ -41,275 +65,333 @@ function showConnectedNotification() {
     notificationId = null;
   }
 
+  chrome.notifications.create(
+    {
+      type: "basic",
+      iconUrl: "icon.png",
+      title: "Звонок соединен",
+      message: "Вкладка звонка разглушена, Яндекс Музыка заглушена.",
+      priority: 2,
+      requireInteraction: true
+    },
+    (id) => {
+      notificationId = id;
+    }
+  );
+}
+
+function showErrorNotification(message) {
   chrome.notifications.create({
-    type: 'basic',
-    iconUrl: 'icon.png',
-    title: '✅ Звонок соединён',
-    message: 'Яндекс Музыка заглушена, вкладка звонка разглушена.',
-    priority: 2,
-    requireInteraction: true
-  }, (id) => {
-    notificationId = id;
-    console.log('[BG] Уведомление показано');
+    type: "basic",
+    iconUrl: "icon.png",
+    title: "Ошибка звонка",
+    message
   });
 }
 
-// ==========================================
-// ОБРАБОТКА СТАТУСА
-// ==========================================
+async function applyAudioPolicyByState(rawState, tabId) {
+  if (typeof tabId !== "number") return;
+  const state = normalizeCallState(rawState);
+  if (!state) return;
 
-function handleStatus(status, tabId) {
-  console.log('[BG] Обработка статуса:', status, 'tabId:', tabId);
+  const previousState = lastStateByTab.get(tabId);
+  lastStateByTab.set(tabId, state);
 
-  if (!tabId) {
-    console.warn('[BG] Нет tabId для обработки статуса');
+  if (state === "Provisioned") {
+    const shouldMuteCallTab = !manualUnmuteTabs.has(tabId);
+    await Promise.all([setCallTabMuted(tabId, shouldMuteCallTab), setYandexMusicMuted(false)]);
     return;
   }
 
-  if (status === 'waiting') {
-    setCallTabMuted(tabId, true);
-    setYandexMusicMuted(false);
-  } else if (status === 'connected') {
-    setCallTabMuted(tabId, false);
-    setYandexMusicMuted(true);
-  } else { // disconnected или idle
-    setCallTabMuted(tabId, false);
-    setYandexMusicMuted(false);
+  if (state === "Connected") {
+    manualUnmuteTabs.delete(tabId);
+    await Promise.all([setCallTabMuted(tabId, false), setYandexMusicMuted(true)]);
+    if (previousState !== "Connected") {
+      showConnectedNotification();
+    }
+    return;
   }
 
-  if (status === 'connected' && lastStatus !== 'connected') {
-    showConnectedNotification();
-  }
-
-  lastStatus = status;
+  manualUnmuteTabs.delete(tabId);
+  await Promise.all([setCallTabMuted(tabId, false), setYandexMusicMuted(false)]);
 }
 
-// ==========================================
-// ВНЕДРЕНИЕ СКРИПТА ДЛЯ ОТСЛЕЖИВАНИЯ СТАТУСА
-// ==========================================
+async function injectStatusWatcher(tabId) {
+  if (typeof tabId !== "number" || injectedWatcherTabs.has(tabId)) return;
 
-function injectStatusWatcher(tabId) {
-  if (injectedTabs.has(tabId)) {
-    console.log('[BG] Вкладка уже содержит watcher, пропускаем');
-    return;
-  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      if (window.__bmstuCallBridgeInstalled) return;
+      window.__bmstuCallBridgeInstalled = true;
 
-  console.log('[BG] Внедрение watcher в вкладку', tabId);
-
-  // 1. Внедряем content script для приёма сообщений
-  chrome.scripting.executeScript({
-    target: { tabId: tabId },
-    func: function() {
-      console.log('[Content] Content script внедрён');
-
-      // Слушаем сообщения от страницы
-      window.addEventListener('message', function(event) {
+      window.addEventListener("message", (event) => {
         if (event.source !== window) return;
-        if (event.data && event.data.type === 'FROM_PAGE') {
-          console.log('[Content] Получен статус из страницы:', event.data.status);
-          chrome.runtime.sendMessage({
-            type: 'callStatus',
-            status: event.data.status
-          }).catch(err => {
-            console.warn('[Content] Ошибка отправки в background:', err);
-          });
-        }
+        if (!event.data || event.data.source !== "bmstu-call-state") return;
+        chrome.runtime
+          .sendMessage({ type: "callState", state: event.data.state })
+          .catch(() => {});
       });
     }
-  }).then(() => {
-    // 2. После внедрения content script, внедряем page script
-    const watcherFunction = function() {
-      console.log('[Page] Watcher внедрён');
+  });
 
-      let scope = null;
-      let lastStatus = null;
-      let watchRegistered = false;
-      let isWaitingForScope = false;
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: () => {
+      if (window.__bmstuCallWatcherInstalled) return;
+      window.__bmstuCallWatcherInstalled = true;
 
-      function sendStatus(status) {
-        console.log('[Page] Отправка статуса:', status);
-        window.postMessage({
-          type: 'FROM_PAGE',
-          status: status
-        }, '*');
+      let lastSentState = null;
+      let hasSeenCallState = false;
+
+      function readCallState() {
+        try {
+          if (!window.angular) return null;
+          const host = document.getElementById("pronto-call-group");
+          if (!host) return null;
+          const scope = window.angular.element(host).scope();
+          return scope?.call?.state || null;
+        } catch (_) {
+          return null;
+        }
       }
 
-      function getStatus() {
-        if (!scope || !scope.call) return null;
-        const state = scope.call.state;
-        if (!state) return null;
-        console.log('[Page] scope.call.state:', state);
-        if (state === 'Connected') return 'connected';
-        if (state === 'Provisioned' || state === 'Idle' || state === 'Ringing' || state === 'Outgoing') return 'waiting';
+      function mapState(rawState) {
+        if (rawState === "Connected") return "Connected";
+        if (rawState === "Provisioned" || rawState === "Outgoing" || rawState === "Ringing") return "Provisioned";
+        if (rawState === "Idle") return "Idle";
         return null;
       }
 
-      function registerWatch() {
-        if (watchRegistered) return;
-        if (!scope || !scope.call) return;
-
-        try {
-          scope.$watch('call.state', function(newVal, oldVal) {
-            if (newVal !== oldVal) {
-              console.log(`[Page] call.state изменился: ${oldVal} → ${newVal}`);
-              const status = getStatus();
-              if (status && status !== lastStatus) {
-                lastStatus = status;
-                sendStatus(status);
-              }
-            }
-          });
-
-          watchRegistered = true;
-          console.log('[Page] ✅ $watch на call.state установлен');
-        } catch(e) {
-          console.error('[Page] ❌ Ошибка установки $watch:', e.message);
-        }
+      function postState(state) {
+        window.postMessage({ source: "bmstu-call-state", state }, "*");
       }
 
-      function tryGetScope() {
-        if (!window.angular) {
-          console.log('[Page] ⏳ Angular ещё не загружен');
-          return false;
+      setInterval(() => {
+        const rawState = readCallState();
+        const mappedState = mapState(rawState);
+
+        if (mappedState) {
+          hasSeenCallState = true;
+          if (mappedState !== lastSentState) {
+            lastSentState = mappedState;
+            postState(mappedState);
+          }
+          return;
         }
 
-        const element = document.getElementById('pronto-call-group');
-        if (!element) {
-          console.log('[Page] ⏳ Элемент #pronto-call-group ещё не появился');
-          return false;
+        if (hasSeenCallState && lastSentState !== "Idle") {
+          lastSentState = "Idle";
+          postState("Idle");
         }
-
-        try {
-          const newScope = window.angular.element(element).scope();
-          if (!newScope) {
-            console.log('[Page] ⏳ scope ещё не доступен');
-            return false;
-          }
-
-          if (!newScope.call) {
-            console.log('[Page] ⏳ scope.call ещё нет (звонок не начат)');
-            return false;
-          }
-
-          scope = newScope;
-          console.log('[Page] ✅ scope получен!');
-          console.log('[Page] scope.call.state:', scope.call.state);
-
-          // Отправляем текущий статус
-          const status = getStatus();
-          if (status) {
-            lastStatus = status;
-            sendStatus(status);
-          }
-
-          registerWatch();
-          return true;
-        } catch(e) {
-          console.error('[Page] ❌ Ошибка получения scope:', e.message);
-          return false;
-        }
-      }
-
-      function waitForScope() {
-        if (isWaitingForScope) return;
-        isWaitingForScope = true;
-        console.log('[Page] ⏳ Ожидание первого звонка...');
-
-        const interval = setInterval(() => {
-          const success = tryGetScope();
-          if (success) {
-            clearInterval(interval);
-            console.log('[Page] 🎉 Scope получен, дальнейшие проверки остановлены');
-            isWaitingForScope = false;
-          }
-        }, 500);
-      }
-
-      // Запуск
-      if (document.readyState === 'complete') {
-        setTimeout(waitForScope, 1000);
-      } else {
-        window.addEventListener('load', function() {
-          setTimeout(waitForScope, 1000);
-        });
-      }
-    };
-
-    chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      world: 'MAIN',
-      func: watcherFunction
-    }).then(() => {
-      injectedTabs.add(tabId);
-      console.log('[BG] Watcher успешно внедрён в вкладку', tabId);
-    }).catch(err => {
-      console.error('[BG] Ошибка внедрения page script:', err);
-    });
-  }).catch(err => {
-    console.error('[BG] Ошибка внедрения content script:', err);
+      }, 400);
+    }
   });
+
+  injectedWatcherTabs.add(tabId);
 }
 
-// ==========================================
-// ОБРАБОТЧИК СООБЩЕНИЙ
-// ==========================================
+async function injectEmergencyButton(tabId) {
+  if (typeof tabId !== "number" || injectedEmergencyButtonTabs.has(tabId)) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      if (window.__bmstuEmergencyButtonInstalled) return;
+      window.__bmstuEmergencyButtonInstalled = true;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "Экстренно размутить";
+      button.style.cssText = [
+        "position: fixed",
+        "right: 16px",
+        "bottom: 16px",
+        "z-index: 2147483647",
+        "padding: 8px 12px",
+        "border: none",
+        "border-radius: 6px",
+        "background: #d9534f",
+        "color: #fff",
+        "font-size: 13px",
+        "cursor: pointer",
+        "box-shadow: 0 2px 8px rgba(0,0,0,.2)"
+      ].join(";");
+
+      button.addEventListener("mouseenter", () => {
+        button.style.background = "#c9302c";
+      });
+
+      button.addEventListener("mouseleave", () => {
+        button.style.background = "#d9534f";
+      });
+
+      button.addEventListener("click", async () => {
+        const previousText = button.textContent;
+        button.textContent = "Размучено";
+        setTimeout(() => {
+          button.textContent = previousText;
+        }, 1500);
+
+        await chrome.runtime.sendMessage({ action: "emergencyUnmuteCallTab" });
+      });
+
+      document.body.appendChild(button);
+    }
+  });
+
+  injectedEmergencyButtonTabs.add(tabId);
+}
+
+async function executeCallOnPage(tabId, phoneNumber) {
+  const execution = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (phone) => {
+      try {
+        const dialerNode = document.querySelector('li.pronto-dialer__item[ng-click="dial();"]');
+        if (!dialerNode) {
+          return { success: false, error: "Кнопка набора не найдена на mail.bmstu.ru" };
+        }
+
+        const scope = window.angular?.element(dialerNode).scope();
+        if (!scope) {
+          return { success: false, error: "Angular scope не найден" };
+        }
+
+        let ctx = scope;
+        let onCall = null;
+        while (ctx) {
+          if (typeof ctx.onCall === "function") {
+            onCall = ctx.onCall;
+            break;
+          }
+          ctx = ctx.$parent;
+        }
+
+        if (onCall) {
+          onCall({ address: phone, useVideo: false });
+          return { success: true };
+        }
+
+        if (typeof scope.dial === "function") {
+          scope.dial(false);
+          return { success: true };
+        }
+
+        return { success: false, error: "Не найдена функция вызова" };
+      } catch (error) {
+        return { success: false, error: error?.message || "Неизвестная ошибка" };
+      }
+    },
+    args: [phoneNumber]
+  });
+
+  return execution?.[0]?.result || { success: false, error: "Не удалось выполнить скрипт звонка" };
+}
+
+async function ensureMailTab() {
+  const existingTabs = await chrome.tabs.query({ url: MAIL_URL });
+  const existingTab = existingTabs.find((tab) => typeof tab.id === "number");
+  if (existingTab?.id) {
+    if (existingTab.status !== "complete") {
+      await waitForTabComplete(existingTab.id);
+    }
+    return existingTab;
+  }
+
+  const tab = await chrome.tabs.create({ url: MAIL_ENTRY_URL, active: false });
+  if (typeof tab.id !== "number") {
+    throw new Error("Не удалось создать вкладку mail.bmstu.ru");
+  }
+  await waitForTabComplete(tab.id);
+  return tab;
+}
+
+async function setupMailTab(tabId) {
+  await Promise.all([injectStatusWatcher(tabId), injectEmergencyButton(tabId)]);
+}
+
+async function dialPhone(phoneNumber) {
+  const normalizedPhone = normalizePhone(phoneNumber);
+  if (!normalizedPhone) {
+    throw new Error("Номер телефона пустой");
+  }
+
+  const mailTab = await ensureMailTab();
+  await setupMailTab(mailTab.id);
+
+  const callResult = await executeCallOnPage(mailTab.id, normalizedPhone);
+  if (!callResult.success) {
+    throw new Error(callResult.error || "Не удалось инициировать звонок");
+  }
+
+  manualUnmuteTabs.delete(mailTab.id);
+  await applyAudioPolicyByState("Provisioned", mailTab.id);
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[BG] Получено сообщение:', message);
-
-  if (message.type === 'callStatus') {
-    const status = message.status;
-    const tabId = sender.tab?.id;
-    
-    if (tabId) {
-      handleStatus(status, tabId);
-    } else {
-      console.warn('[BG] Неизвестный tabId для статуса:', status);
-    }
-    
-    sendResponse({ received: true });
+  if (message?.action === "dialPhone") {
+    (async () => {
+      try {
+        await dialPhone(message.phoneNumber);
+        sendResponse({ success: true });
+      } catch (error) {
+        const errMessage = error?.message || "Неизвестная ошибка";
+        showErrorNotification(errMessage);
+        sendResponse({ success: false, error: errMessage });
+      }
+    })();
+    return true;
   }
-  
-  return true;
-});
 
-// ==========================================
-// ОТСЛЕЖИВАНИЕ ОТКРЫТИЯ ВКЛАДКИ mail.bmstu.ru
-// ==========================================
+  if (message?.type === "callState") {
+    const tabId = sender.tab?.id;
+    applyAudioPolicyByState(message.state, tabId);
+    sendResponse({ received: true });
+    return true;
+  }
+
+  if (message?.action === "emergencyUnmuteCallTab") {
+    const tabId = sender.tab?.id;
+    if (typeof tabId === "number") {
+      manualUnmuteTabs.add(tabId);
+      setCallTabMuted(tabId, false);
+    }
+    sendResponse({ received: true });
+    return true;
+  }
+
+  if (message?.action === "muteCall") {
+    const tabId = sender.tab?.id;
+    applyAudioPolicyByState("Provisioned", tabId);
+    sendResponse({ received: true });
+    return true;
+  }
+
+  return false;
+});
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url?.includes('mail.bmstu.ru')) {
-    console.log('[BG] Обнаружена загрузка mail.bmstu.ru');
-    // Даём время на загрузку Angular
-    setTimeout(() => {
-      injectStatusWatcher(tabId);
-    }, 2000);
-  }
+  if (changeInfo.status !== "complete") return;
+  if (!tab.url || !tab.url.includes("mail.bmstu.ru")) return;
+
+  setTimeout(() => {
+    setupMailTab(tabId).catch(() => {});
+  }, 1200);
 });
 
-chrome.tabs.onCreated.addListener((tab) => {
-  if (tab.url?.includes('mail.bmstu.ru')) {
-    console.log('[BG] Создана вкладка mail.bmstu.ru');
-    const listener = (tabId, info) => {
-      if (tabId === tab.id && info.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(listener);
-        setTimeout(() => {
-          injectStatusWatcher(tabId);
-        }, 2000);
-      }
-    };
-    chrome.tabs.onUpdated.addListener(listener);
-  }
+chrome.tabs.onRemoved.addListener((tabId) => {
+  injectedWatcherTabs.delete(tabId);
+  injectedEmergencyButtonTabs.delete(tabId);
+  manualUnmuteTabs.delete(tabId);
+  lastStateByTab.delete(tabId);
 });
 
-// Проверяем уже открытые вкладки при старте
-chrome.tabs.query({ url: 'https://mail.bmstu.ru/*' }, (tabs) => {
+chrome.tabs.query({ url: MAIL_URL }).then((tabs) => {
   for (const tab of tabs) {
-    console.log('[BG] Найдена открытая вкладка mail.bmstu.ru');
-    setTimeout(() => {
-      injectStatusWatcher(tab.id);
-    }, 2000);
+    if (typeof tab.id !== "number") continue;
+    setupMailTab(tab.id).catch(() => {});
   }
 });
-
-console.log('[BG] 🚀 Background service worker готов');
