@@ -60,8 +60,10 @@ async function setCallTabMuted(tabId, muted) {
   if (typeof tabId !== "number") return;
   try {
     await chrome.tabs.update(tabId, { muted });
+    return true;
   } catch (_) {
     // Вкладка могла уже закрыться.
+    return false;
   }
 }
 
@@ -150,6 +152,7 @@ async function injectStatusWatcher(tabId) {
       if (window.__bmstuCallWatcherInstalled) return;
       window.__bmstuCallWatcherInstalled = true;
 
+      const originalTitle = document.title;
       let lastSentState = null;
       let hasSeenCallState = false;
 
@@ -172,7 +175,22 @@ async function injectStatusWatcher(tabId) {
         return null;
       }
 
+      function updateTitle(state) {
+        if (state === "Connected") {
+          document.title = "Звонок соединен";
+          return;
+        }
+
+        if (state === "Provisioned") {
+          document.title = "Вызов идет";
+          return;
+        }
+
+        document.title = originalTitle;
+      }
+
       function postState(state) {
+        updateTitle(state);
         window.postMessage({ source: "bmstu-call-state", state }, "*");
       }
 
@@ -191,6 +209,7 @@ async function injectStatusWatcher(tabId) {
 
         if (hasSeenCallState && lastSentState !== "Idle") {
           lastSentState = "Idle";
+          updateTitle("Idle");
           postState("Idle");
         }
       }, 400);
@@ -240,11 +259,26 @@ async function injectEmergencyButton(tabId) {
       button.addEventListener("click", async () => {
         const previousText = button.textContent;
         button.textContent = "Размучено";
+        try {
+          const response = await chrome.runtime.sendMessage({ action: "emergencyUnmuteCallTab" });
+          if (!response?.success) {
+            button.textContent = "Не удалось";
+            setTimeout(() => {
+              button.textContent = previousText;
+            }, 1500);
+            return;
+          }
+        } catch (_) {
+          button.textContent = "Не удалось";
+          setTimeout(() => {
+            button.textContent = previousText;
+          }, 1500);
+          return;
+        }
+
         setTimeout(() => {
           button.textContent = previousText;
         }, 1500);
-
-        await chrome.runtime.sendMessage({ action: "emergencyUnmuteCallTab" });
       });
 
       document.body.appendChild(button);
@@ -252,6 +286,16 @@ async function injectEmergencyButton(tabId) {
   });
 
   injectedEmergencyButtonTabs.add(tabId);
+}
+
+async function resolveMailTabId(sender) {
+  if (typeof sender.tab?.id === "number") {
+    return sender.tab.id;
+  }
+
+  const tabs = await chrome.tabs.query({ url: MAIL_URL });
+  const mailTab = tabs.find((tab) => typeof tab.id === "number");
+  return mailTab?.id;
 }
 
 async function executeCallOnPage(tabId, phoneNumber) {
@@ -365,12 +409,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.action === "emergencyUnmuteCallTab") {
-    const tabId = sender.tab?.id;
-    if (typeof tabId === "number") {
-      manualUnmuteTabs.add(tabId);
-      setCallTabMuted(tabId, false);
-    }
-    sendResponse({ received: true });
+    (async () => {
+      const tabId = await resolveMailTabId(sender);
+      if (typeof tabId === "number") {
+        manualUnmuteTabs.add(tabId);
+        const unmuted = await setCallTabMuted(tabId, false);
+        if (!unmuted) {
+          showErrorNotification("Не удалось размутить вкладку звонка");
+        }
+        sendResponse({ received: true, success: unmuted });
+        return;
+      }
+
+      showErrorNotification("Не найдена вкладка звонка для экстренного размута");
+      sendResponse({ received: true, success: false });
+    })();
     return true;
   }
 
