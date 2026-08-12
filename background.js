@@ -7,6 +7,7 @@ const injectedWatcherTabs = new Set();
 const injectedEmergencyButtonTabs = new Set();
 const manualUnmuteTabs = new Set();
 const lastStateByTab = new Map();
+const audioPolicyQueueByTab = new Map();
 
 function getScriptingApi() {
   if (chrome?.scripting?.executeScript) return chrome.scripting;
@@ -19,9 +20,20 @@ function normalizePhone(phone) {
 }
 
 function normalizeCallState(state) {
-  if (state === "Connected") return "Connected";
-  if (state === "Provisioned" || state === "Outgoing" || state === "Ringing") return "Provisioned";
-  if (state === "Idle") return "Idle";
+  const normalized = String(state || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "idle" || normalized.includes("disconnect")) return "Idle";
+  if (normalized.includes("connect")) return "Connected";
+  if (
+    normalized === "provisioned" ||
+    normalized === "outgoing" ||
+    normalized === "ringing" ||
+    normalized.includes("ring") ||
+    normalized.includes("dial") ||
+    normalized.includes("progress")
+  ) {
+    return "Provisioned";
+  }
   return null;
 }
 
@@ -125,6 +137,24 @@ async function applyAudioPolicyByState(rawState, tabId) {
   await Promise.all([setCallTabMuted(tabId, false), setYandexMusicMuted(false)]);
 }
 
+function enqueueAudioPolicyByState(rawState, tabId) {
+  if (typeof tabId !== "number") return Promise.resolve();
+
+  const previous = audioPolicyQueueByTab.get(tabId) || Promise.resolve();
+  const next = previous.catch(() => {}).then(() => applyAudioPolicyByState(rawState, tabId));
+
+  audioPolicyQueueByTab.set(
+    tabId,
+    next.finally(() => {
+      if (audioPolicyQueueByTab.get(tabId) === next) {
+        audioPolicyQueueByTab.delete(tabId);
+      }
+    })
+  );
+
+  return next;
+}
+
 async function injectStatusWatcher(tabId) {
   if (typeof tabId !== "number" || injectedWatcherTabs.has(tabId)) return;
   const scripting = getScriptingApi();
@@ -169,9 +199,20 @@ async function injectStatusWatcher(tabId) {
       }
 
       function mapState(rawState) {
-        if (rawState === "Connected") return "Connected";
-        if (rawState === "Provisioned" || rawState === "Outgoing" || rawState === "Ringing") return "Provisioned";
-        if (rawState === "Idle") return "Idle";
+        const normalized = String(rawState || "").trim().toLowerCase();
+        if (!normalized) return null;
+        if (normalized === "idle" || normalized.includes("disconnect")) return "Idle";
+        if (normalized.includes("connect")) return "Connected";
+        if (
+          normalized === "provisioned" ||
+          normalized === "outgoing" ||
+          normalized === "ringing" ||
+          normalized.includes("ring") ||
+          normalized.includes("dial") ||
+          normalized.includes("progress")
+        ) {
+          return "Provisioned";
+        }
         return null;
       }
 
@@ -204,6 +245,10 @@ async function injectStatusWatcher(tabId) {
             lastSentState = mappedState;
             postState(mappedState);
           }
+          return;
+        }
+
+        if (rawState) {
           return;
         }
 
@@ -383,7 +428,7 @@ async function dialPhone(phoneNumber) {
   }
 
   manualUnmuteTabs.delete(mailTab.id);
-  await applyAudioPolicyByState("Provisioned", mailTab.id);
+  await enqueueAudioPolicyByState("Provisioned", mailTab.id);
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -402,9 +447,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "callState") {
-    const tabId = sender.tab?.id;
-    applyAudioPolicyByState(message.state, tabId);
-    sendResponse({ received: true });
+    (async () => {
+      try {
+        const tabId = await resolveMailTabId(sender);
+        await enqueueAudioPolicyByState(message.state, tabId);
+        sendResponse({ received: true });
+      } catch (error) {
+        sendResponse({ received: false, error: error?.message || "Не удалось обработать состояние звонка" });
+      }
+    })();
     return true;
   }
 
@@ -428,9 +479,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.action === "muteCall") {
-    const tabId = sender.tab?.id;
-    applyAudioPolicyByState("Provisioned", tabId);
-    sendResponse({ received: true });
+    (async () => {
+      try {
+        const tabId = await resolveMailTabId(sender);
+        await enqueueAudioPolicyByState("Provisioned", tabId);
+        sendResponse({ received: true });
+      } catch (error) {
+        sendResponse({ received: false, error: error?.message || "Не удалось приглушить звонок" });
+      }
+    })();
     return true;
   }
 
@@ -451,6 +508,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   injectedEmergencyButtonTabs.delete(tabId);
   manualUnmuteTabs.delete(tabId);
   lastStateByTab.delete(tabId);
+  audioPolicyQueueByTab.delete(tabId);
 });
 
 chrome.tabs.query({ url: MAIL_URL }).then((tabs) => {
