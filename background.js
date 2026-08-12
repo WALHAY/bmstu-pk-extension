@@ -1,4 +1,4 @@
-// Управление мьютом Яндекс Музыки
+// Управление Яндекс Музыкой
 async function setYandexMusicMuted(muted) {
   const tabs = await chrome.tabs.query({
     url: ["https://music.yandex.ru/*", "https://yandex.ru/music/*"]
@@ -11,7 +11,7 @@ async function setYandexMusicMuted(muted) {
   }
 }
 
-// Управление мьютом вкладки звонка
+// Управление вкладкой звонка
 async function setCallTabMuted(tabId, muted) {
   try {
     await chrome.tabs.update(tabId, { muted });
@@ -19,28 +19,61 @@ async function setCallTabMuted(tabId, muted) {
   } catch (e) { /* ignore */ }
 }
 
+// === УВЕДОМЛЕНИЕ ТОЛЬКО ПРИ СОЕДИНЕНИИ ===
+let notificationId = null;
+
+function showConnectedNotification() {
+  // Удаляем предыдущее уведомление, если есть
+  if (notificationId) {
+    chrome.notifications.clear(notificationId);
+    notificationId = null;
+  }
+
+  // Создаём новое уведомление о соединении
+  chrome.notifications.create({
+    type: 'basic',
+    iconUrl: 'icon.png',
+    title: '✅ Звонок соединён',
+    message: 'Яндекс Музыка заглушена, вкладка звонка разглушена.',
+    priority: 2,
+    requireInteraction: true // остаётся до ручного закрытия
+  }, (id) => {
+    notificationId = id;
+    console.log('[BG] Уведомление о соединении показано, ID:', id);
+  });
+}
+
+let lastStatus = null;
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'callStatus') {
     const status = message.status; // 'waiting', 'connected', 'disconnected'
     console.log('[BG] Статус:', status);
 
-    // Логика:
-    // - Ожидание: глушим звонок, музыку не трогаем
-    // - Соединено: разглушаем звонок, глушим музыку
-    // - Завершён: разглушаем и звонок, и музыку
-
+    // === Логика мьютов ===
     if (status === 'waiting') {
       setCallTabMuted(sender.tab.id, true);
-      setYandexMusicMuted(false); // музыка играет
+      setYandexMusicMuted(false);
     } else if (status === 'connected') {
       setCallTabMuted(sender.tab.id, false);
-      setYandexMusicMuted(true); // музыка заглушена
+      setYandexMusicMuted(true);
     } else { // disconnected или null
       setCallTabMuted(sender.tab.id, false);
       setYandexMusicMuted(false);
     }
 
+    // === Уведомление ТОЛЬКО при переходе в 'connected' ===
+    if (status === 'connected' && lastStatus !== 'connected') {
+      showConnectedNotification();
+    }
+
+    lastStatus = status;
     sendResponse({ received: true });
   }
   return true;
+});
+
+// При старте расширения чистим возможные старые уведомления
+chrome.runtime.onStartup.addListener(() => {
+  if (notificationId) chrome.notifications.clear(notificationId);
 });
