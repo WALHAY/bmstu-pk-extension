@@ -9,6 +9,10 @@ const manualUnmuteTabs = new Set();
 const lastStateByTab = new Map();
 const audioPolicyQueueByTab = new Map();
 
+function log(...args) {
+  console.log("[BMSTU]", ...args);
+}
+
 function getScriptingApi() {
   if (chrome?.scripting?.executeScript) return chrome.scripting;
   if (browser?.scripting?.executeScript) return browser.scripting;
@@ -51,26 +55,37 @@ function waitForTabComplete(tabId, timeoutMs = 30000) {
 }
 
 async function setYandexMusicMuted(muted) {
+  log("Yandex Music mute ->", muted);
   const tabs = await chrome.tabs.query({ url: YANDEX_MUSIC_URLS });
+  log("Yandex Music tabs:", tabs.map((tab) => tab.id).filter((id) => typeof id === "number"));
   await Promise.allSettled(
     tabs
       .filter((tab) => typeof tab.id === "number")
-      .map((tab) => chrome.tabs.update(tab.id, { muted }))
+      .map((tab) =>
+        chrome.tabs.update(tab.id, { muted }).then(
+          () => log("Yandex Music tab updated:", tab.id, "muted =", muted),
+          (error) => log("Yandex Music tab update failed:", tab.id, error?.message || error)
+        )
+      )
   );
 }
 
 async function setCallTabMuted(tabId, muted) {
   if (typeof tabId !== "number") return;
   try {
+    log("Call tab mute ->", tabId, muted);
     await chrome.tabs.update(tabId, { muted });
+    log("Call tab updated:", tabId, "muted =", muted);
     return true;
   } catch (_) {
     // Вкладка могла уже закрыться.
+    log("Call tab update failed:", tabId, muted);
     return false;
   }
 }
 
 function showConnectedNotification() {
+  log("Show connected notification");
   if (notificationId) {
     chrome.notifications.clear(notificationId);
     notificationId = null;
@@ -104,6 +119,7 @@ function showErrorNotification(message) {
 async function applyAudioPolicyByState(rawState, tabId) {
   if (typeof tabId !== "number") return;
   const state = normalizeCallState(rawState);
+  log("Apply audio policy:", { rawState, state, tabId, manualUnmute: manualUnmuteTabs.has(tabId), lastState: lastStateByTab.get(tabId) });
   if (!state) return;
 
   const previousState = lastStateByTab.get(tabId);
@@ -149,6 +165,7 @@ function enqueueAudioPolicyByState(rawState, tabId) {
 async function injectStatusWatcher(tabId) {
   if (typeof tabId !== "number" || injectedWatcherTabs.has(tabId)) return;
   const scripting = getScriptingApi();
+  log("Inject status watcher:", tabId);
 
   await scripting.executeScript({
     target: { tabId },
@@ -214,6 +231,7 @@ async function injectStatusWatcher(tabId) {
 
       function postState(state) {
         updateTitle(state);
+        console.log("[BMSTU] page state ->", state, "title ->", document.title);
         window.postMessage({ source: "bmstu-call-state", state }, "*");
       }
 
@@ -225,6 +243,7 @@ async function injectStatusWatcher(tabId) {
           hasSeenCallState = true;
           if (mappedState !== lastSentState) {
             lastSentState = mappedState;
+            console.log("[BMSTU] detected state ->", mappedState, "raw ->", rawState);
             postState(mappedState);
           }
           return;
@@ -236,6 +255,7 @@ async function injectStatusWatcher(tabId) {
 
         if (hasSeenCallState && lastSentState !== "Idle") {
           lastSentState = "Idle";
+          console.log("[BMSTU] fallback state -> Idle");
           updateTitle("Idle");
           postState("Idle");
         }
@@ -249,6 +269,7 @@ async function injectStatusWatcher(tabId) {
 async function injectEmergencyButton(tabId) {
   if (typeof tabId !== "number") return;
   const scripting = getScriptingApi();
+  log("Inject emergency button:", tabId);
 
   await scripting.executeScript({
     target: { tabId },
@@ -286,8 +307,10 @@ async function injectEmergencyButton(tabId) {
       button.addEventListener("click", async () => {
         const previousText = button.textContent;
         button.textContent = "Размучено";
+        console.log("[BMSTU] emergency unmute clicked");
         try {
           const response = await chrome.runtime.sendMessage({ action: "emergencyUnmuteCallTab" });
+          console.log("[BMSTU] emergency unmute response:", response);
           if (!response?.success) {
             button.textContent = "Не удалось";
             setTimeout(() => {
@@ -317,11 +340,13 @@ async function injectEmergencyButton(tabId) {
 
 async function resolveMailTabId(sender) {
   if (typeof sender.tab?.id === "number") {
+    log("Resolved mail tab from sender:", sender.tab.id);
     return sender.tab.id;
   }
 
   const tabs = await chrome.tabs.query({ url: MAIL_URL });
   const mailTab = tabs.find((tab) => typeof tab.id === "number");
+  log("Resolved mail tab from query:", mailTab?.id);
   return mailTab?.id;
 }
 
@@ -397,6 +422,7 @@ async function setupMailTab(tabId) {
 
 async function dialPhone(phoneNumber) {
   const normalizedPhone = normalizePhone(phoneNumber);
+  log("Dial phone requested:", normalizedPhone);
   if (!normalizedPhone) {
     throw new Error("Номер телефона пустой");
   }
@@ -405,6 +431,7 @@ async function dialPhone(phoneNumber) {
   await setupMailTab(mailTab.id);
 
   const callResult = await executeCallOnPage(mailTab.id, normalizedPhone);
+  log("Dial result:", callResult);
   if (!callResult.success) {
     throw new Error(callResult.error || "Не удалось инициировать звонок");
   }
@@ -414,6 +441,7 @@ async function dialPhone(phoneNumber) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  log("Message received:", message?.action || message?.type, "senderTab =", sender.tab?.id);
   if (message?.action === "dialPhone") {
     (async () => {
       try {
@@ -432,6 +460,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const tabId = await resolveMailTabId(sender);
+        log("callState payload:", message.state, "tabId:", tabId);
         await enqueueAudioPolicyByState(message.state, tabId);
         sendResponse({ received: true });
       } catch (error) {
@@ -444,9 +473,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.action === "emergencyUnmuteCallTab") {
     (async () => {
       const tabId = await resolveMailTabId(sender);
+      log("Emergency unmute requested for tab:", tabId);
       if (typeof tabId === "number") {
         manualUnmuteTabs.add(tabId);
         const unmuted = await setCallTabMuted(tabId, false);
+        log("Emergency unmute result:", { tabId, unmuted });
         if (!unmuted) {
           showErrorNotification("Не удалось размутить вкладку звонка");
         }
@@ -464,6 +495,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const tabId = await resolveMailTabId(sender);
+        log("muteCall requested for tab:", tabId);
         await enqueueAudioPolicyByState("Provisioned", tabId);
         sendResponse({ received: true });
       } catch (error) {
@@ -479,6 +511,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete") return;
   if (!tab.url || !tab.url.includes("mail.bmstu.ru")) return;
+  log("Tab updated complete:", tabId, tab.url);
 
   setTimeout(() => {
     setupMailTab(tabId).catch(() => {});
@@ -486,6 +519,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  log("Tab removed:", tabId);
   injectedWatcherTabs.delete(tabId);
   injectedEmergencyButtonTabs.delete(tabId);
   manualUnmuteTabs.delete(tabId);
@@ -494,6 +528,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.query({ url: MAIL_URL }).then((tabs) => {
+  log("Initial mail tabs:", tabs.map((tab) => tab.id).filter((id) => typeof id === "number"));
   for (const tab of tabs) {
     if (typeof tab.id !== "number") continue;
     setupMailTab(tab.id).catch(() => {});

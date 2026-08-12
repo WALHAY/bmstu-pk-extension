@@ -66,9 +66,24 @@ function injectDialButton() {
     }
 
     const phoneNumber = formatPhoneNumber(rawPhone.trim());
-    const response = await chrome.runtime.sendMessage({ action: "dialPhone", phoneNumber });
-    if (!response?.success) {
-      alert(response?.error || "Не удалось инициировать звонок");
+    console.log("[BMSTU] dial button clicked:", phoneNumber);
+
+    const runtime = globalThis.chrome?.runtime;
+    if (!runtime?.sendMessage) {
+      console.error("[BMSTU] chrome.runtime.sendMessage unavailable");
+      alert("Расширение недоступно. Обновите страницу и попробуйте снова.");
+      return;
+    }
+
+    try {
+      const response = await runtime.sendMessage({ action: "dialPhone", phoneNumber });
+      console.log("[BMSTU] dial response:", response);
+      if (!response?.success) {
+        alert(response?.error || "Не удалось инициировать звонок");
+      }
+    } catch (error) {
+      console.error("[BMSTU] dial sendMessage failed:", error);
+      alert(error?.message || "Не удалось отправить сообщение в расширение");
     }
   });
 }
