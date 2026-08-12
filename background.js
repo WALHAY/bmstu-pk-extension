@@ -20,20 +20,11 @@ function normalizePhone(phone) {
 }
 
 function normalizeCallState(state) {
-  const normalized = String(state || "").trim().toLowerCase();
-  if (!normalized) return null;
-  if (normalized === "idle" || normalized.includes("disconnect")) return "Idle";
-  if (normalized.includes("connect")) return "Connected";
-  if (
-    normalized === "provisioned" ||
-    normalized === "outgoing" ||
-    normalized === "ringing" ||
-    normalized.includes("ring") ||
-    normalized.includes("dial") ||
-    normalized.includes("progress")
-  ) {
-    return "Provisioned";
-  }
+  const value = String(state || "").trim();
+  if (value === "Connected" || value === "connected") return "Connected";
+  if (value === "Provisioned" || value === "Outgoing" || value === "Ringing") return "Provisioned";
+  if (value === "provisioned" || value === "outgoing" || value === "ringing") return "Provisioned";
+  if (value === "Idle" || value === "idle") return "Idle";
   return null;
 }
 
@@ -199,20 +190,11 @@ async function injectStatusWatcher(tabId) {
       }
 
       function mapState(rawState) {
-        const normalized = String(rawState || "").trim().toLowerCase();
-        if (!normalized) return null;
-        if (normalized === "idle" || normalized.includes("disconnect")) return "Idle";
-        if (normalized.includes("connect")) return "Connected";
-        if (
-          normalized === "provisioned" ||
-          normalized === "outgoing" ||
-          normalized === "ringing" ||
-          normalized.includes("ring") ||
-          normalized.includes("dial") ||
-          normalized.includes("progress")
-        ) {
-          return "Provisioned";
-        }
+        const value = String(rawState || "").trim();
+        if (value === "Connected" || value === "connected") return "Connected";
+        if (value === "Provisioned" || value === "Outgoing" || value === "Ringing") return "Provisioned";
+        if (value === "provisioned" || value === "outgoing" || value === "ringing") return "Provisioned";
+        if (value === "Idle" || value === "idle") return "Idle";
         return null;
       }
 
