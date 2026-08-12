@@ -176,9 +176,11 @@ async function injectStatusWatcher(tabId) {
       window.addEventListener("message", (event) => {
         if (event.source !== window) return;
         if (!event.data || event.data.source !== "bmstu-call-state") return;
+        console.log("[BMSTU] message bridge received state:", event.data.state);
         chrome.runtime
           .sendMessage({ type: "callState", state: event.data.state })
-          .catch(() => {});
+          .then(() => console.log("[BMSTU] callState sent to background"))
+          .catch((error) => console.log("[BMSTU] callState send failed:", error));
       });
     }
   });
@@ -196,12 +198,23 @@ async function injectStatusWatcher(tabId) {
 
       function readCallState() {
         try {
-          if (!window.angular) return null;
+          if (!window.angular) {
+            console.log("[BMSTU watcher] angular not found");
+            return null;
+          }
           const host = document.getElementById("pronto-call-group");
-          if (!host) return null;
+          if (!host) {
+            console.log("[BMSTU watcher] pronto-call-group element not found");
+            return null;
+          }
           const scope = window.angular.element(host).scope();
-          return scope?.call?.state || null;
-        } catch (_) {
+          const state = scope?.call?.state || null;
+          if (state) {
+            console.log("[BMSTU watcher] read state:", state);
+          }
+          return state;
+        } catch (error) {
+          console.log("[BMSTU watcher] readCallState error:", error?.message);
           return null;
         }
       }
@@ -231,7 +244,7 @@ async function injectStatusWatcher(tabId) {
 
       function postState(state) {
         updateTitle(state);
-        console.log("[BMSTU] page state ->", state, "title ->", document.title);
+        console.log("[BMSTU watcher] post state:", state, "new title:", document.title);
         window.postMessage({ source: "bmstu-call-state", state }, "*");
       }
 
@@ -243,19 +256,20 @@ async function injectStatusWatcher(tabId) {
           hasSeenCallState = true;
           if (mappedState !== lastSentState) {
             lastSentState = mappedState;
-            console.log("[BMSTU] detected state ->", mappedState, "raw ->", rawState);
+            console.log("[BMSTU watcher] state change:", { rawState, mappedState });
             postState(mappedState);
           }
           return;
         }
 
         if (rawState) {
+          console.log("[BMSTU watcher] unknown state (not mapped):", rawState);
           return;
         }
 
         if (hasSeenCallState && lastSentState !== "Idle") {
           lastSentState = "Idle";
-          console.log("[BMSTU] fallback state -> Idle");
+          console.log("[BMSTU watcher] fallback -> Idle");
           updateTitle("Idle");
           postState("Idle");
         }
