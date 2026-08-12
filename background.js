@@ -8,6 +8,12 @@ const injectedEmergencyButtonTabs = new Set();
 const manualUnmuteTabs = new Set();
 const lastStateByTab = new Map();
 
+function getScriptingApi() {
+  if (chrome?.scripting?.executeScript) return chrome.scripting;
+  if (browser?.scripting?.executeScript) return browser.scripting;
+  throw new Error("Scripting API недоступен: проверьте загрузку расширения и permission 'scripting'");
+}
+
 function normalizePhone(phone) {
   return String(phone || "").trim();
 }
@@ -118,8 +124,9 @@ async function applyAudioPolicyByState(rawState, tabId) {
 
 async function injectStatusWatcher(tabId) {
   if (typeof tabId !== "number" || injectedWatcherTabs.has(tabId)) return;
+  const scripting = getScriptingApi();
 
-  await chrome.scripting.executeScript({
+  await scripting.executeScript({
     target: { tabId },
     func: () => {
       if (window.__bmstuCallBridgeInstalled) return;
@@ -135,7 +142,7 @@ async function injectStatusWatcher(tabId) {
     }
   });
 
-  await chrome.scripting.executeScript({
+  await scripting.executeScript({
     target: { tabId },
     world: "MAIN",
     func: () => {
@@ -194,8 +201,9 @@ async function injectStatusWatcher(tabId) {
 
 async function injectEmergencyButton(tabId) {
   if (typeof tabId !== "number" || injectedEmergencyButtonTabs.has(tabId)) return;
+  const scripting = getScriptingApi();
 
-  await chrome.scripting.executeScript({
+  await scripting.executeScript({
     target: { tabId },
     func: () => {
       if (window.__bmstuEmergencyButtonInstalled) return;
@@ -245,7 +253,8 @@ async function injectEmergencyButton(tabId) {
 }
 
 async function executeCallOnPage(tabId, phoneNumber) {
-  const execution = await chrome.scripting.executeScript({
+  const scripting = getScriptingApi();
+  const execution = await scripting.executeScript({
     target: { tabId },
     world: "MAIN",
     func: (phone) => {
