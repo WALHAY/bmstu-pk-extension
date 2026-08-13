@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "BMSTU Call Muter",
-  "version": "6.0",
-  "description": "Мутит вкладку звонка до соединения, а после — мутит Яндекс Музыку. Показывает системное уведомление.",
+  "name": "BMSTU Priemka Call Assistant",
+  "version": "7.0",
+  "description": "Добавляет кнопку набора на pk.eu.bmstu.ru и управляет mute/unmute звонка и Яндекс Музыки по статусу вызова.",
   "permissions": [
     "tabs",
-    "notifications"
+    "notifications",
+    "scripting"
   ],
   "host_permissions": [
+    "https://pk.eu.bmstu.ru/*",
     "https://mail.bmstu.ru/*",
     "https://*.bmstu.ru/*",
     "https://music.yandex.ru/*",
@@ -18,10 +20,9 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://mail.bmstu.ru/*", "https://*.bmstu.ru/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle",
-      "all_frames": true
+      "matches": ["https://pk.eu.bmstu.ru/*"],
+      "js": ["dialer-content.js"],
+      "run_at": "document_idle"
     }
   ]
 }
