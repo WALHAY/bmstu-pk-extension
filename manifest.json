@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BMSTU Priemka Call Assistant",
-  "version": "7.0",
+  "version": "1.0",
   "description": "Добавляет кнопку набора на pk.eu.bmstu.ru и управляет mute/unmute звонка и Яндекс Музыки по статусу вызова.",
   "permissions": [
     "tabs",
