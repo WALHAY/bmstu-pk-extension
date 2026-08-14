@@ -43,6 +43,26 @@ function createDialButton() {
   return button;
 }
 
+function injectCommentOption() {
+  const select = document.querySelector(".comment-new-text-default");
+  if (!select) return;
+
+  // Проверяем, не добавлена ли уже опция
+  if (select.querySelector("option[value='не дозвон']")) return;
+
+  const option = document.createElement("option");
+  option.value = "не дозвон";
+  option.textContent = "не дозвон";
+
+  // Добавляем после первой опции (placeholder)
+  const firstOption = select.querySelector("option[disabled]");
+  if (firstOption && firstOption.nextElementSibling) {
+    firstOption.nextElementSibling.before(option);
+  } else {
+    select.insertBefore(option, select.children[1]);
+  }
+}
+
 function injectDialButton() {
   const phoneField = findPhoneField();
   if (!phoneField) return;
@@ -89,15 +109,20 @@ function injectDialButton() {
 }
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", injectDialButton);
+  document.addEventListener("DOMContentLoaded", () => {
+    injectDialButton();
+    injectCommentOption();
+  });
 } else {
   injectDialButton();
+  injectCommentOption();
 }
 
 const observer = new MutationObserver(() => {
   if (!document.querySelector(".bmstu-dial-button")) {
     injectDialButton();
   }
+  injectCommentOption();
 });
 
 observer.observe(document.body, { childList: true, subtree: true });
