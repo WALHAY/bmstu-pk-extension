@@ -6,7 +6,8 @@
   "permissions": [
     "tabs",
     "notifications",
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "host_permissions": [
     "https://pk.eu.bmstu.ru/*",
@@ -17,6 +18,10 @@
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "BMSTU Call Assistant Settings",
+    "default_popup": "popup.html"
   },
   "content_scripts": [
     {
