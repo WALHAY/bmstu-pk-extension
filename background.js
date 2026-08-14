@@ -278,12 +278,12 @@ async function injectStatusWatcher(tabId) {
 
       function updateTitle(state) {
         if (state === "Connected") {
-          document.title = "Звонок соединен";
+          document.title = "Соединено";
           return;
         }
 
         if (state === "Provisioned") {
-          document.title = "Вызов идет";
+          document.title = "Вызываем";
           return;
         }
 
@@ -342,7 +342,7 @@ async function injectEmergencyButton(tabId) {
       const button = document.createElement("button");
       button.id = "bmstu-emergency-unmute-button";
       button.type = "button";
-      button.textContent = "Экстренно размутить";
+      button.textContent = "Вернуть звук";
       button.style.cssText = [
         "position: fixed",
         "right: 16px",
