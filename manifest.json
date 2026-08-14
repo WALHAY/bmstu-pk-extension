@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "BMSTU Priemka Call Assistant",
-  "version": "1.0",
-  "description": "Добавляет кнопку набора на pk.eu.bmstu.ru и управляет mute/unmute звонка и Яндекс Музыки по статусу вызова.",
+  "name": "BMSTU PK Helper",
+  "version": "1.2",
+  "description": "Добавляет QoL фичи на сайт приемной комиссии МГТУ им. Баумана",
   "permissions": [
     "tabs",
     "notifications",
@@ -20,7 +20,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "BMSTU Call Assistant Settings",
+    "default_title": "BMSTU PK Helper Settings",
     "default_popup": "popup.html"
   },
   "content_scripts": [
