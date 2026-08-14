@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Настройки</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 12px;
+        width: 320px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #1f2937;
+        background: #f9fafb;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .setting {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 8px 0;
+      }
+
+      .setting input {
+        margin-top: 2px;
+      }
+
+      .setting label {
+        font-size: 13px;
+        line-height: 1.35;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Настройки звонка</h1>
+
+    <div class="setting">
+      <input id="mute-yandex" type="checkbox" />
+      <label for="mute-yandex">Глушить Яндекс Музыку во время разговора</label>
+    </div>
+
+    <div class="setting">
+      <input id="mute-rings" type="checkbox" />
+      <label for="mute-rings">Глушить вкладку звонка на этапе дозвона (Provisioned)</label>
+    </div>
+
+    <div class="setting">
+      <input id="notify-connected" type="checkbox" />
+      <label for="notify-connected">Показывать уведомление после соединения с абитуриентом</label>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

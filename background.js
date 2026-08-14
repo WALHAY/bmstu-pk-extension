@@ -1,6 +1,12 @@
 const MAIL_URL = "https://mail.bmstu.ru/*";
 const MAIL_ENTRY_URL = "https://mail.bmstu.ru";
 const YANDEX_MUSIC_URLS = ["https://music.yandex.ru/*", "https://yandex.ru/music/*"];
+const SETTINGS_KEY = "bmstuCallAssistantSettings";
+const DEFAULT_SETTINGS = {
+  muteYandexMusicDuringCall: true,
+  muteRingsDuringProvisioned: true,
+  showConnectedNotification: true
+};
 
 let notificationId = null;
 const injectedWatcherTabs = new Set();
@@ -11,6 +17,30 @@ const audioPolicyQueueByTab = new Map();
 
 function log(...args) {
   console.log("[BMSTU]", ...args);
+}
+
+async function getSettings() {
+  const storage = chrome?.storage?.sync || chrome?.storage?.local;
+  if (!storage?.get) return { ...DEFAULT_SETTINGS };
+
+  try {
+    const result = await storage.get(SETTINGS_KEY);
+    const storedSettings = result?.[SETTINGS_KEY] || {};
+    return {
+      ...DEFAULT_SETTINGS,
+      ...storedSettings
+    };
+  } catch (error) {
+    log("Failed to read settings, using defaults:", error?.message || error);
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function getConnectedNotificationMessage(settings) {
+  if (settings?.muteYandexMusicDuringCall) {
+    return "Вкладка звонка разглушена, Яндекс Музыка заглушена.";
+  }
+  return "Вкладка звонка разглушена.";
 }
 
 function getScriptingApi() {
@@ -84,7 +114,7 @@ async function setCallTabMuted(tabId, muted) {
   }
 }
 
-function showConnectedNotification() {
+function showConnectedNotification(settings) {
   log("Show connected notification");
   if (notificationId) {
     chrome.notifications.clear(notificationId);
@@ -97,7 +127,7 @@ function showConnectedNotification() {
       type: "basic",
       iconUrl: "icon.png",
       title: "Звонок соединен",
-      message: "Вкладка звонка разглушена, Яндекс Музыка заглушена.",
+      message: getConnectedNotificationMessage(settings),
       priority: 2,
       requireInteraction: true
     },
@@ -105,6 +135,12 @@ function showConnectedNotification() {
       notificationId = id;
     }
   );
+}
+
+function clearConnectedNotification() {
+  if (!notificationId) return;
+  chrome.notifications.clear(notificationId);
+  notificationId = null;
 }
 
 function showErrorNotification(message) {
@@ -119,6 +155,7 @@ function showErrorNotification(message) {
 async function applyAudioPolicyByState(rawState, tabId) {
   if (typeof tabId !== "number") return;
   const state = normalizeCallState(rawState);
+  const settings = await getSettings();
   log("Apply audio policy:", { rawState, state, tabId, manualUnmute: manualUnmuteTabs.has(tabId), lastState: lastStateByTab.get(tabId) });
   if (!state) return;
 
@@ -126,18 +163,29 @@ async function applyAudioPolicyByState(rawState, tabId) {
   lastStateByTab.set(tabId, state);
 
   if (state === "Provisioned") {
-    const shouldMuteCallTab = !manualUnmuteTabs.has(tabId);
-    await Promise.all([setCallTabMuted(tabId, shouldMuteCallTab), setYandexMusicMuted(false)]);
+    const shouldMuteCallTab = settings.muteRingsDuringProvisioned && !manualUnmuteTabs.has(tabId);
+    const shouldMuteYandexMusic = false;
+    await Promise.all([
+      setCallTabMuted(tabId, shouldMuteCallTab),
+      setYandexMusicMuted(shouldMuteYandexMusic)
+    ]);
     return;
   }
 
   if (state === "Connected") {
     manualUnmuteTabs.delete(tabId);
-    await Promise.all([setCallTabMuted(tabId, false), setYandexMusicMuted(true)]);
-    if (previousState !== "Connected") {
-      showConnectedNotification();
+    await Promise.all([
+      setCallTabMuted(tabId, false),
+      setYandexMusicMuted(Boolean(settings.muteYandexMusicDuringCall))
+    ]);
+    if (settings.showConnectedNotification && previousState !== "Connected") {
+      showConnectedNotification(settings);
     }
     return;
+  }
+
+  if (state === "Idle") {
+    clearConnectedNotification();
   }
 
   manualUnmuteTabs.delete(tabId);
