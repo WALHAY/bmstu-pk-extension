@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BMSTU PK Helper",
-  "version": "1.2",
+  "version": "1.3",
   "description": "Добавляет QoL фичи на сайт приемной комиссии МГТУ им. Баумана",
   "permissions": [
     "tabs",

@@ -85,17 +85,50 @@ function waitForTabComplete(tabId, timeoutMs = 30000) {
 }
 
 async function setYandexMusicMuted(muted) {
-  log("Yandex Music mute ->", muted);
+  log("Yandex Music pause -> stop playback");
+
+  // Находим все вкладки Яндекс Музыки
   const tabs = await chrome.tabs.query({ url: YANDEX_MUSIC_URLS });
-  log("Yandex Music tabs:", tabs.map((tab) => tab.id).filter((id) => typeof id === "number"));
+  log("Yandex Music tabs:", tabs.map((tab) => tab.id).filter(id => typeof id === "number"));
+
+  // Для каждой вкладки внедряем скрипт, который ставит на паузу
   await Promise.allSettled(
     tabs
       .filter((tab) => typeof tab.id === "number")
       .map((tab) =>
-        chrome.tabs.update(tab.id, { muted }).then(
-          () => log("Yandex Music tab updated:", tab.id, "muted =", muted),
-          (error) => log("Yandex Music tab update failed:", tab.id, error?.message || error)
-        )
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            // Ищем кнопку воспроизведения/паузы
+            const playBtn = document.querySelector(
+              '.VibePlayerControls_playButton__vnoer, ' +
+              '[data-testid="play-button"], ' +
+              '.player-controls__btn_play'
+            );
+
+            if (!playBtn) {
+              return { paused: false, reason: 'Кнопка не найдена' };
+            }
+
+            const isPlaying = playBtn.getAttribute('aria-label') === 'Пауза';
+            if (isPlaying && muted) {
+              playBtn.click(); // Ставим на паузу
+              return { paused: true, reason: 'Музыка остановлена' };
+            } else {
+              return { paused: false, reason: 'Уже на паузе' };
+            }
+          }
+        })
+        .then((results) => {
+          const result = results[0]?.result;
+          log(
+            `Yandex Music tab ${tab.id}:`,
+            result?.reason || 'Выполнено'
+          );
+        })
+        .catch((error) => {
+          log(`Yandex Music tab ${tab.id} failed:`, error?.message || error);
+        })
       )
   );
 }
